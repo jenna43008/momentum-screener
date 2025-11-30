@@ -51,7 +51,7 @@ with st.sidebar:
         "Max symbols to scan when no watchlist",
         min_value=50,
         max_value=2000,
-        value=200,
+        value=2000,
         step=50,
         help="Keeps scans fast when you don't use a custom watchlist.",
     )
@@ -124,7 +124,7 @@ with st.sidebar:
     # 🔇 V9: toggle to enable/disable alerts
     enable_alerts = st.checkbox(
         "Enable Audio + Alert Banner",
-        value=True,
+        value=False,
         help="Turn this off to completely silence alerts."
     )
 
