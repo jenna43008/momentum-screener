@@ -194,6 +194,6 @@ def run_scan(w,mu,en,ofb,m_ofb,mode,pool):
         for f in concurrent.futures.as_completed([ex.submit(scan_one,u,en,ofb,m_ofb) for u in uni]):
             r=f.result()
             if r:out.append(r)
-    return pd.DataFra```
+    return pd.DataFrame(out)
 
 
