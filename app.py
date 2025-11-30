@@ -6,13 +6,11 @@ from datetime import datetime, timezone
 from streamlit_autorefresh import st_autorefresh
 import plotly.graph_objs as go
 import math
-import random  # NEW: for randomizing universe
-
 
 # ========================= SETTINGS =========================
-THREADS               = 12           # slightly lower = more stable, still fast
+THREADS               = 20           # keep high but not crazy
 AUTO_REFRESH_MS       = 60_000       # auto-refresh every 60 seconds
-HISTORY_LOOKBACK_DAYS = 10           # 10-day mode
+HISTORY_LOOKBACK_DAYS = 10           # 🔥 10-day mode
 INTRADAY_INTERVAL     = "2m"         # 2-minute candles
 INTRADAY_RANGE        = "1d"
 
@@ -21,7 +19,7 @@ DEFAULT_MIN_VOLUME    = 100_000
 DEFAULT_MIN_BREAKOUT  = 0.0
 
 # ========================= AUTO REFRESH =========================
-st_autorefresh(interval=AUTO_REFRESH_MS, key="refresh_v9_hybrid")
+st_autorefresh(interval=AUTO_REFRESH_MS, key="refresh_v8")
 
 # ========================= PAGE SETUP =========================
 st.set_page_config(
@@ -65,18 +63,10 @@ with st.sidebar:
     st.header("Filters")
 
     max_price = st.number_input("Max Price ($)", 1.0, 1000.0, DEFAULT_MAX_PRICE, 1.0)
-    min_volume = st.number_input(
-        "Min Daily Volume", 10_000, 10_000_000, DEFAULT_MIN_VOLUME, 10_000
-    )
-    min_breakout = st.number_input(
-        "Min Breakout Score", -50.0, 200.0, 0.0, 1.0
-    )
-    min_pm_move = st.number_input(
-        "Min Premarket %", -50.0, 200.0, 0.0, 0.5
-    )
-    min_yday_gain = st.number_input(
-        "Min Yesterday %", -50.0, 200.0, 0.0, 0.5
-    )
+    min_volume = st.number_input("Min Daily Volume", 10_000, 10_000_000, DEFAULT_MIN_VOLUME, 10_000)
+    min_breakout = st.number_input("Min Breakout Score", -50.0, 200.0, 0.0, 1.0)
+    min_pm_move = st.number_input("Min Premarket %", -50.0, 200.0, 0.0, 0.5)
+    min_yday_gain = st.number_input("Min Yesterday %", -50.0, 200.0, 0.0, 0.5)
 
     squeeze_only = st.checkbox("Short-Squeeze Only")
     catalyst_only = st.checkbox("Must Have News/Earnings")
@@ -85,15 +75,9 @@ with st.sidebar:
     st.markdown("---")
     st.subheader("🔊 Audio Alert Thresholds")
 
-    ALERT_SCORE_THRESHOLD = st.slider(
-        "Alert when Score ≥", 10, 200, 30, 5
-    )
-    ALERT_PM_THRESHOLD = st.slider(
-        "Alert when Premarket % ≥", 1, 150, 4, 1
-    )
-    ALERT_VWAP_THRESHOLD = st.slider(
-        "Alert when VWAP Dist % ≥", 1, 50, 2, 1
-    )
+    ALERT_SCORE_THRESHOLD = st.slider("Alert when Score ≥", 10, 200, 30, 5)
+    ALERT_PM_THRESHOLD = st.slider("Alert when Premarket % ≥", 1, 150, 4, 1)
+    ALERT_VWAP_THRESHOLD = st.slider("Alert when VWAP Dist % ≥", 1, 50, 2, 1)
 
     st.markdown("---")
     if st.button("🧹 Refresh Now"):
@@ -106,15 +90,11 @@ def load_symbols():
     """Load US symbols (NASDAQ + otherlisted)."""
     nasdaq = pd.read_csv(
         "https://www.nasdaqtrader.com/dynamic/SymDir/nasdaqlisted.txt",
-        sep="|",
-        skipfooter=1,
-        engine="python",
+        sep="|", skipfooter=1, engine="python"
     )
     other = pd.read_csv(
         "https://www.nasdaqtrader.com/dynamic/SymDir/otherlisted.txt",
-        sep="|",
-        skipfooter=1,
-        engine="python",
+        sep="|", skipfooter=1, engine="python"
     )
 
     nasdaq["Exchange"] = "NASDAQ"
@@ -122,32 +102,23 @@ def load_symbols():
     other = other.rename(columns={"ACT Symbol": "Symbol"})
 
     df = pd.concat(
-        [
-            nasdaq[["Symbol", "ETF", "Exchange"]],
-            other[["Symbol", "ETF", "Exchange"]],
-        ]
+        [nasdaq[["Symbol", "ETF", "Exchange"]],
+         other[["Symbol", "ETF", "Exchange"]]]
     ).dropna(subset=["Symbol"])
 
     df = df[df["Symbol"].str.contains(r"^[A-Z]{1,5}$", na=False)]
     return df.to_dict("records")
 
-
 def build_universe(watchlist_text: str, max_universe: int):
-    """
-    Return a list of symbol dicts to scan.
-    V9 Hybrid tweak:
-    - If watchlist: use that directly
-    - Else: RANDOMIZE the full universe, then take the first `max_universe`
-      so you don't only hammer A/B/C tickers.
-    """
+    """Return a list of symbol dicts to scan, based on watchlist or limited universe."""
     wl = watchlist_text.strip()
     if wl:
         raw = wl.replace("\n", " ").replace(",", " ").split()
         tickers = sorted(set(s.upper() for s in raw if s.strip()))
         return [{"Symbol": t, "Exchange": "WATCH"} for t in tickers]
 
+    # No watchlist → limited subset of full US universe
     all_syms = load_symbols()
-    random.shuffle(all_syms)  # 🔀 RANDOMIZE ORDER EACH RUN
     return all_syms[:max_universe]
 
 
@@ -195,7 +166,6 @@ def short_window_score(pm, yday, m3, m10, rsi7, rvol10, catalyst, squeeze, vwap,
 
     return round(score, 2)
 
-
 def breakout_probability(score: float) -> float:
     """Map heuristic score to a 0–100 'probability-like' value via logistic."""
     try:
@@ -203,7 +173,6 @@ def breakout_probability(score: float) -> float:
         return round(prob * 100, 1)
     except Exception:
         return None
-
 
 def multi_timeframe_label(pm, m3, m10):
     """Simple multi-timeframe alignment label: intraday + 3D + 10D."""
@@ -276,18 +245,13 @@ def scan_one(sym, enable_enrichment: bool):
         avg10 = float(volume.mean()) if len(volume) > 0 else 0
         rvol10 = vol_last / avg10 if avg10 > 0 else None
 
-        # Intraday 2m history for PM, VWAP, order flow, live volume
+        # Intraday 2m history for PM, VWAP, order flow
         premarket_pct = None
         vwap_dist = None
         order_flow_bias = None
-        live_vol = None  # 🔥 for real-time ranking
 
         try:
-            intra = stock.history(
-                period=INTRADAY_RANGE,
-                interval=INTRADAY_INTERVAL,
-                prepost=True,
-            )
+            intra = stock.history(period=INTRADAY_RANGE, interval=INTRADAY_INTERVAL, prepost=True)
         except Exception:
             intra = None
 
@@ -295,9 +259,6 @@ def scan_one(sym, enable_enrichment: bool):
             iclose = intra["Close"]
             iopen = intra["Open"]
             ivol = intra["Volume"]
-
-            # Current intraday volume (last bar)
-            live_vol = float(ivol.iloc[-1])
 
             # Premarket % from last two bars
             last_close = float(iclose.iloc[-1])
@@ -316,9 +277,7 @@ def scan_one(sym, enable_enrichment: bool):
             # Order-flow bias: buy vs sell volume
             of_df = intra[["Open", "Close", "Volume"]].dropna()
             if not of_df.empty:
-                sign = (of_df["Close"] > of_df["Open"]).astype(int) - (
-                    of_df["Close"] < of_df["Open"]
-                ).astype(int)
+                sign = (of_df["Close"] > of_df["Open"]).astype(int) - (of_df["Close"] < of_df["Open"]).astype(int)
                 buy_vol = float((of_df["Volume"] * (sign > 0)).sum())
                 sell_vol = float((of_df["Volume"] * (sign < 0)).sum())
                 total = buy_vol + sell_vol
@@ -350,9 +309,7 @@ def scan_one(sym, enable_enrichment: bool):
             try:
                 news = stock.get_news()
                 if news and "providerPublishTime" in news[0]:
-                    pub = datetime.fromtimestamp(
-                        news[0]["providerPublishTime"], tz=timezone.utc
-                    )
+                    pub = datetime.fromtimestamp(news[0]["providerPublishTime"], tz=timezone.utc)
                     catalyst = (datetime.now(timezone.utc) - pub).days <= 3
             except Exception:
                 pass
@@ -400,12 +357,10 @@ def scan_one(sym, enable_enrichment: bool):
             "Industry": industry,
             "MTF_Trend": mtf_label,
             "Spark": spark_series,
-            "LiveVol": live_vol,  # 🔥 real-time 2m bar volume for ranking
         }
 
     except Exception:
         return None
-
 
 @st.cache_data(ttl=6)
 def run_scan(watchlist_text: str, max_universe: int, enable_enrichment: bool):
@@ -426,14 +381,12 @@ def run_scan(watchlist_text: str, max_universe: int, enable_enrichment: bool):
 # ========================= SPARKLINE & CHART HELPERS =========================
 def sparkline(series: pd.Series):
     fig = go.Figure()
-    fig.add_trace(
-        go.Scatter(
-            y=series.values,
-            mode="lines",
-            line=dict(width=2),
-            hoverinfo="skip",
-        )
-    )
+    fig.add_trace(go.Scatter(
+        y=series.values,
+        mode="lines",
+        line=dict(width=2),
+        hoverinfo="skip",
+    ))
     fig.update_layout(
         height=60,
         width=160,
@@ -443,16 +396,13 @@ def sparkline(series: pd.Series):
     )
     return fig
 
-
 def bigline(series: pd.Series, title: str):
     fig = go.Figure()
-    fig.add_trace(
-        go.Scatter(
-            y=series.values,
-            mode="lines+markers",
-            name=title,
-        )
-    )
+    fig.add_trace(go.Scatter(
+        y=series.values,
+        mode="lines+markers",
+        name=title,
+    ))
     fig.update_layout(
         height=220,
         margin=dict(l=40, r=20, t=40, b=40),
@@ -464,7 +414,6 @@ def bigline(series: pd.Series, title: str):
 # ========================= AUDIO ALERT STATE =========================
 if "alerted" not in st.session_state:
     st.session_state.alerted = set()
-
 
 def trigger_audio_alert(symbol: str, reason: str):
     """Play sound + mark symbol as alerted once per session."""
@@ -478,7 +427,7 @@ def trigger_audio_alert(symbol: str, reason: str):
     st.warning(f"🔔 {symbol}: {reason}")
 
 # ========================= MAIN DISPLAY =========================
-with st.spinner("Scanning (10-day momentum, hybrid speed + volume)…"):
+with st.spinner("Scanning (10-day momentum, faster universe)…"):
     df = run_scan(watchlist_text, max_universe, enable_enrichment)
 
 if df.empty:
@@ -498,14 +447,9 @@ else:
     if vwap_only:
         df = df[df["VWAP%"].fillna(-999) > 0]
 
-    # 🔥 V9 HYBRID SORT:
-    # 1) Highest current intraday volume (LiveVol)
-    # 2) Then by Score
-    # 3) Then by Premarket %, RSI
-    sort_cols = [c for c in ["LiveVol", "Score", "PM%", "RSI7"] if c in df.columns]
-    df = df.sort_values(by=sort_cols, ascending=[False] * len(sort_cols))
+    df = df.sort_values(by=["Score", "PM%", "RSI7"], ascending=[False, False, False])
 
-    st.subheader(f"🔥 10-Day Momentum Board — {len(df)} symbols (Volume-ranked)")
+    st.subheader(f"🔥 10-Day Momentum Board — {len(df)} symbols")
 
     # Iterate + audio alerts + inline charts
     for _, row in df.iterrows():
@@ -540,9 +484,7 @@ else:
         c3.write(f"VWAP Dist %: {row['VWAP%']}")
         c3.write(f"Order Flow Bias: {row['FlowBias']}")
         if enable_enrichment:
-            c3.write(
-                f"Squeeze: {row['Squeeze?']} | LowFloat: {row['LowFloat?']}"
-            )
+            c3.write(f"Squeeze: {row['Squeeze?']} | LowFloat: {row['LowFloat?']}")
             c3.write(f"Sec/Ind: {row['Sector']} / {row['Industry']}")
         else:
             c3.write("Enrichment: OFF (float/short/news skipped for speed)")
@@ -550,46 +492,24 @@ else:
         # Column 4: Sparkline + full chart
         c4.plotly_chart(sparkline(row["Spark"]), use_container_width=False)
         with c4.expander("📊 View 10-day chart"):
-            c4.plotly_chart(
-                bigline(row["Spark"], f"{sym} - Last 10 Days"),
-                use_container_width=True,
-            )
+            c4.plotly_chart(bigline(row["Spark"], f"{sym} - Last 10 Days"), use_container_width=True)
 
         st.divider()
 
     # Download current table
     csv_cols = [
-        "Symbol",
-        "Exchange",
-        "Price",
-        "Score",
-        "Prob_Rise%",
-        "PM%",
-        "YDay%",
-        "3D%",
-        "10D%",
-        "RSI7",
-        "EMA10 Trend",
-        "RVOL_10D",
-        "VWAP%",
-        "FlowBias",
-        "Squeeze?",
-        "LowFloat?",
-        "Sector",
-        "Industry",
-        "Catalyst",
-        "MTF_Trend",
-        "LiveVol",
+        "Symbol", "Exchange", "Price", "Score", "Prob_Rise%",
+        "PM%", "YDay%", "3D%", "10D%", "RSI7", "EMA10 Trend",
+        "RVOL_10D", "VWAP%", "FlowBias", "Squeeze?", "LowFloat?",
+        "Sector", "Industry", "Catalyst", "MTF_Trend",
     ]
     csv_cols = [c for c in csv_cols if c in df.columns]
 
     st.download_button(
         "📥 Download Screener CSV",
         data=df[csv_cols].to_csv(index=False),
-        file_name="v9_hybrid_volume_momentum_screener.csv",
+        file_name="v8_10day_momentum_screener.csv",
         mime="text/csv",
     )
 
 st.caption("For research and education only. Not financial advice.")
-
-
