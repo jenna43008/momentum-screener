@@ -10,12 +10,12 @@ import random
 
 # ========================= SETTINGS =========================
 THREADS               = 20           # keep high but not crazy
-AUTO_REFRESH_MS       = 10_000       # auto-refresh every 10 seconds
+AUTO_REFRESH_MS       = 60_000       # auto-refresh every 60 seconds
 HISTORY_LOOKBACK_DAYS = 10           # 🔥 10-day mode
 INTRADAY_INTERVAL     = "2m"         # 2-minute candles
 INTRADAY_RANGE        = "1d"
 
-DEFAULT_MAX_PRICE     = 50.0
+DEFAULT_MAX_PRICE     = 5.0
 DEFAULT_MIN_VOLUME    = 100_000
 DEFAULT_MIN_BREAKOUT  = 0.0
 
@@ -635,7 +635,7 @@ else:
 
         # Column 4: Sparkline + full chart
         c4.plotly_chart(sparkline(row["Spark"]), use_container_width=False)
-        with c4.expander("📊 View 10-day chart"):
+        with 
             c4.plotly_chart(bigline(row["Spark"], f"{sym} - Last 10 Days"), use_container_width=True)
 
         st.divider()
