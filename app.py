@@ -8,10 +8,10 @@ import plotly.graph_objs as go
 import math
 
 # ========================= SETTINGS =========================
-THREADS               = 20           # keep high but not crazy
-AUTO_REFRESH_MS       = 10_000       # auto-refresh every 10 seconds
-HISTORY_LOOKBACK_DAYS = 10           # 🔥 10-day mode
-INTRADAY_INTERVAL     = "2m"         # 2-minute candles
+THREADS               = 20
+AUTO_REFRESH_MS       = 10_000
+HISTORY_LOOKBACK_DAYS = 10
+INTRADAY_INTERVAL     = "2m"
 INTRADAY_RANGE        = "1d"
 
 DEFAULT_MAX_PRICE     = 50.0
@@ -29,548 +29,215 @@ st.set_page_config(
 )
 
 st.title("🚀 V8 — 10-Day Momentum Breakout Screener (Faster + Watchlist Mode)")
-st.caption(
-    "Short-window model • EMA10 • RSI(7) • 3D & 10D momentum • 10D RVOL • "
-    "VWAP + order flow • Watchlist mode • Audio alerts"
-)
+st.caption("Short-window model • EMA10 • RSI(7) • 3D & 10D momentum • 10D RVOL • VWAP + Order Flow • Audio Alerts")
 
-# ========================= SIDEBAR CONTROLS =========================
+# ========================= SIDEBAR =========================
 with st.sidebar:
     st.header("Universe")
 
-    watchlist_text = st.text_area(
-        "Watchlist tickers (comma/space/newline separated):",
-        value="",
-        height=80,
-        help="Example: AAPL, TSLA, NVDA, AMD",
-    )
+    watchlist_text = st.text_area("Watchlist tickers:", value="", height=80)
 
-    max_universe = st.slider(
-        "Max symbols to scan when no watchlist",
-        min_value=50,
-        max_value=600,
-        value=200,
-        step=50,
-        help="Keeps scans fast when you don't use a custom watchlist.",
-    )
+    max_universe = st.slider("Max Symbols Scanned (when no watchlist)", 50, 600, 200, 50)
 
-    # NEW: region filter
-    region_mode = st.radio(
-        "Region Filter",
-        options=["Global (no country filter)", "US + Canada Only"],
-        index=1,
-        help="When 'US + Canada Only' is selected, tickers whose country is not US/Canada are skipped."
-    )
-
-    enable_enrichment = st.checkbox(
-        "Include float/short + news (slower, more data)",
-        value=False,
-    )
+    enable_enrichment = st.checkbox("📌 Include Float/Short + News (slower)", value=False)
 
     st.markdown("---")
     st.header("Filters")
 
-    max_price = st.number_input("Max Price ($)", 1.0, 1000.0, DEFAULT_MAX_PRICE, 1.0)
-    min_volume = st.number_input("Min Daily Volume", 10_000, 10_000_000, DEFAULT_MIN_VOLUME, 10_000)
-    min_breakout = st.number_input("Min Breakout Score", -50.0, 200.0, 0.0, 1.0)
-    min_pm_move = st.number_input("Min Premarket %", -50.0, 200.0, 0.0, 0.5)
-    min_yday_gain = st.number_input("Min Yesterday %", -50.0, 200.0, 0.0, 0.5)
+    max_price = st.number_input("Max Price ($)", 1.0, 1000.0, DEFAULT_MAX_PRICE)
+    min_volume = st.number_input("Min Daily Volume", 10_000, 10_000_000, DEFAULT_MIN_VOLUME)
+    min_breakout = st.number_input("Min Breakout Score", -50.0, 200.0, 0.0)
+    min_pm_move = st.number_input("Min Premarket %", -50.0, 200.0, 0.0)
+    min_yday_gain = st.number_input("Min Yesterday %", -50.0, 200.0, 0.0)
 
     squeeze_only = st.checkbox("Short-Squeeze Only")
     catalyst_only = st.checkbox("Must Have News/Earnings")
-    vwap_only = st.checkbox("Above VWAP Only (VWAP% > 0)")
-
-    # NEW: minimum order flow bias floor (0–1)
-    min_ofb = st.slider(
-        "Min Order Flow Bias (0–1, buyer control)",
-        min_value=0.00,
-        max_value=1.00,
-        value=0.50,
-        step=0.01,
-        help="Exclude symbols where buy-side order flow is below this level."
-    )
+    vwap_only = st.checkbox("Above VWAP Only")
 
     st.markdown("---")
-    st.subheader("🔊 Audio Alert Thresholds")
+    st.subheader("🔊 Alerts")
 
-    ALERT_SCORE_THRESHOLD = st.slider("Alert when Score ≥", 10, 200, 30, 5)
-    ALERT_PM_THRESHOLD = st.slider("Alert when Premarket % ≥", 1, 150, 4, 1)
-    ALERT_VWAP_THRESHOLD = st.slider("Alert when VWAP Dist % ≥", 1, 50, 2, 1)
+    ALERT_SCORE_THRESHOLD = st.slider("Score Alert ≥", 10, 200, 30)
+    ALERT_PM_THRESHOLD    = st.slider("Premarket % Alert ≥", 1, 150, 4)
+    ALERT_VWAP_THRESHOLD  = st.slider("VWAP Distance % ≥", 1, 50, 2)
 
     st.markdown("---")
-    if st.button("🧹 Refresh Now"):
+    if st.button("♻ Refresh Now"):
         st.cache_data.clear()
-        st.success("Cache cleared — fresh scan will run now.")
+        st.success("Cache cleared — new scan running...")
 
-# ========================= SYMBOL LOAD =========================
+# ========================= LOAD SYMBOLS =========================
 @st.cache_data(ttl=900)
 def load_symbols():
-    """Load US symbols (NASDAQ + otherlisted)."""
-    nasdaq = pd.read_csv(
-        "https://www.nasdaqtrader.com/dynamic/SymDir/nasdaqlisted.txt",
-        sep="|", skipfooter=1, engine="python"
-    )
-    other = pd.read_csv(
-        "https://www.nasdaqtrader.com/dynamic/SymDir/otherlisted.txt",
-        sep="|", skipfooter=1, engine="python"
-    )
+    nasdaq = pd.read_csv("https://www.nasdaqtrader.com/dynamic/SymDir/nasdaqlisted.txt",
+                         sep="|", skipfooter=1, engine="python")
+    other  = pd.read_csv("https://www.nasdaqtrader.com/dynamic/SymDir/otherlisted.txt",
+                         sep="|", skipfooter=1, engine="python")
 
     nasdaq["Exchange"] = "NASDAQ"
     other["Exchange"] = other["Exchange"].fillna("NYSE/AMEX/ARCA")
     other = other.rename(columns={"ACT Symbol": "Symbol"})
 
-    df = pd.concat(
-        [nasdaq[["Symbol", "ETF", "Exchange"]],
-         other[["Symbol", "ETF", "Exchange"]]]
-    ).dropna(subset=["Symbol"])
-
+    df = pd.concat([nasdaq[["Symbol","ETF","Exchange"]], other[["Symbol","ETF","Exchange"]]])
     df = df[df["Symbol"].str.contains(r"^[A-Z]{1,5}$", na=False)]
-    # Default country assumption (will be refined by yfinance when enrichment/region filter is used)
-    df["Country"] = "US"
     return df.to_dict("records")
 
+def build_universe(text, max_universe):
+    if text.strip():
+        wl = text.replace("\n"," ").replace(","," ").split()
+        return [{"Symbol":s.upper(),"Exchange":"WATCH"} for s in wl]
+    return load_symbols()[:max_universe]
 
-def build_universe(watchlist_text: str, max_universe: int):
-    """Return a list of symbol dicts to scan, based on watchlist or limited universe."""
-    wl = watchlist_text.strip()
-    if wl:
-        raw = wl.replace("\n", " ").replace(",", " ").split()
-        tickers = sorted(set(s.upper() for s in raw if s.strip()))
-        return [{"Symbol": t, "Exchange": "WATCH", "Country": "Unknown"} for t in tickers]
+# ========================= SCORING =========================
+def short_window_score(pm,yday,m3,m10,rsi7,rvol10,catalyst,squeeze,vwap,flow):
+    score=0
+    if pm: score+=pm*1.6
+    if yday: score+=yday*0.8
+    if m3: score+=m3*1.2
+    if m10: score+=m10*0.6
+    if rsi7>55: score+=(rsi7-55)*0.4
+    if rvol10>1.2: score+=(rvol10-1.2)*2
+    if vwap>0: score+=min(vwap,6)*1.5
+    if flow: score+=(flow-0.5)*22
+    if catalyst: score+=8
+    if squeeze: score+=12
+    return round(score,2)
 
-    # No watchlist → limited subset of full US universe
-    all_syms = load_symbols()
-    return all_syms[:max_universe]
+def breakout_probability(score):
+    return round((1/(1+math.exp(-score/20)))*100,1)
 
+def multi_timeframe_label(pm,m3,m10):
+    b=sum([(pm>0 if pm else 0),(m3>0 if m3 else 0),(m10>0 if m10 else 0)])
+    return ("✅ Bullish" if b==3 else "🟢 Leaning" if b==2
+            else "🟡 Mixed" if b==1 else "🔻 Weak")
 
-# ========================= SCORING (10-DAY MODEL) =========================
-def short_window_score(pm, yday, m3, m10, rsi7, rvol10, catalyst, squeeze, vwap, flow_bias):
-    """
-    pm        = premarket % (2m candles)
-    yday      = yesterday % move
-    m3        = 3-day % move
-    m10       = 10-day % move
-    rsi7      = RSI(7)
-    rvol10    = relative volume vs 10-day avg
-    catalyst  = bool
-    squeeze   = bool
-    vwap      = % above VWAP
-    flow_bias = 0..1 (buy volume / total volume)
-    """
-    score = 0.0
-
-    if pm is not None:
-        score += max(pm, 0) * 1.6
-    if yday is not None:
-        score += max(yday, 0) * 0.8
-    if m3 is not None:
-        score += max(m3, 0) * 1.2
-    if m10 is not None:
-        score += max(m10, 0) * 0.6
-
-    if rsi7 is not None and rsi7 > 55:
-        score += (rsi7 - 55) * 0.4
-
-    if rvol10 is not None and rvol10 > 1.2:
-        score += (rvol10 - 1.2) * 2.0
-
-    if vwap is not None and vwap > 0:
-        score += min(vwap, 6) * 1.5
-
-    if flow_bias is not None:
-        score += (flow_bias - 0.5) * 22.0
-
-    if catalyst:
-        score += 8.0
-    if squeeze:
-        score += 12.0
-
-    return round(score, 2)
-
-
-def breakout_probability(score: float) -> float:
-    """Map heuristic score to a 0–100 'probability-like' value via logistic."""
+# ========================= SCAN ONE =========================
+def scan_one(sym, enrich):
     try:
-        prob = 1 / (1 + math.exp(-score / 20.0))
-        return round(prob * 100, 1)
-    except Exception:
-        return None
+        t=sym["Symbol"]
+        s=yf.Ticker(t)
 
+        hist=s.history(period="10d",interval="1d")
+        if hist.empty or len(hist)<5: return None
 
-def multi_timeframe_label(pm, m3, m10):
-    """Simple multi-timeframe alignment label: intraday + 3D + 10D."""
-    bull_intraday = pm is not None and pm > 0
-    bull_3d = m3 is not None and m3 > 0
-    bull_10d = m10 is not None and m10 > 0
+        close=hist["Close"]; vol=hist["Volume"]
+        price=float(close.iloc[-1])
+        vol_last=float(vol.iloc[-1])   # ⭐ NEW current volume extracted
 
-    positives = sum([bull_intraday, bull_3d, bull_10d])
+        if price>max_price or vol_last<min_volume: return None
 
-    if positives == 3:
-        return "✅ Aligned Bullish (Intraday + 3D + 10D)"
-    elif positives == 2:
-        return "🟢 Leaning Bullish"
-    elif positives == 1:
-        return "🟡 Mixed"
-    else:
-        return "🔻 Not Aligned"
+        yday=(price-close.iloc[-2])/close.iloc[-2]*100 if len(close)>=2 else None
+        m3=(price-close.iloc[-4])/close.iloc[-4]*100 if len(close)>=4 else None
+        m10=(price-close.iloc[0])/close.iloc[0]*100
 
+        delta=close.diff()
+        rsi7=float((100-(100/(1+(delta.clip(lower=0).rolling(7).mean()/
+                                     (-delta.clip(upper=0).rolling(7).mean()))))).iloc[-1])
 
-# ========================= CORE SCAN =========================
-def scan_one(sym, enable_enrichment: bool, region_mode: str, min_ofb: float):
-    try:
-        ticker = sym["Symbol"]
-        exchange = sym.get("Exchange", "UNKNOWN")
-        country = sym.get("Country", "Unknown")
+        ema10=float(close.ewm(span=10).mean().iloc[-1])
 
-        stock = yf.Ticker(ticker)
+        avg10=vol.mean(); rvol10=vol_last/avg10 if avg10 else None
 
-        # Daily 10d history
-        hist = stock.history(period=f"{HISTORY_LOOKBACK_DAYS}d", interval="1d")
-        if hist is None or hist.empty or len(hist) < 5:
-            return None
+        intra=s.history(period="1d",interval="2m",prepost=True)
+        pm=vwap=flow=None
 
-        close = hist["Close"]
-        volume = hist["Volume"]
+        if not intra.empty and len(intra)>=3:
+            pm=(intra["Close"].iloc[-1]-intra["Close"].iloc[-2])/intra["Close"].iloc[-2]*100
+            tp=(intra["High"]+intra["Low"]+intra["Close"])/3
+            vwap=(tp*intra["Volume"]).sum()/intra["Volume"].sum()
+            vwap=(price-vwap)/vwap*100 if vwap else None
+            of=intra[["Open","Close","Volume"]].dropna()
+            if not of.empty:
+                sign=(of["Close"]>of["Open"]).astype(int)-(of["Close"]<of["Open"]).astype(int)
+                buy=(of["Volume"]*(sign>0)).sum(); sell=(of["Volume"]*(sign<0)).sum()
+                flow=buy/(buy+sell) if buy+sell>0 else None
 
-        price = float(close.iloc[-1])
-        vol_last = float(volume.iloc[-1])
-
-        if price > max_price or vol_last < min_volume:
-            return None
-
-        # Momentum windows: yesterday, 3-day, 10-day
-        if len(close) >= 2 and close.iloc[-2] > 0:
-            yday_pct = (close.iloc[-1] - close.iloc[-2]) / close.iloc[-2] * 100
-        else:
-            yday_pct = None
-
-        if len(close) >= 4 and close.iloc[-4] > 0:
-            m3 = (close.iloc[-1] - close.iloc[-4]) / close.iloc[-4] * 100
-        else:
-            m3 = None
-
-        if close.iloc[0] > 0:
-            m10 = (close.iloc[-1] - close.iloc[0]) / close.iloc[0] * 100
-        else:
-            m10 = None
-
-        # RSI(7)
-        delta = close.diff()
-        gain = delta.clip(lower=0).rolling(7).mean()
-        loss = (-delta.clip(upper=0)).rolling(7).mean()
-        rs = gain / loss
-        rsi_series = 100 - (100 / (1 + rs))
-        rsi7 = float(rsi_series.iloc[-1])
-
-        # EMA10
-        ema10 = float(close.ewm(span=10, adjust=False).mean().iloc[-1])
-        ema_trend = "🔥 Breakout" if price > ema10 and rsi7 > 55 else "Neutral"
-
-        # 10-day RVOL
-        avg10 = float(volume.mean()) if len(volume) > 0 else 0
-        rvol10 = vol_last / avg10 if avg10 > 0 else None
-
-        # Intraday 2m history for PM, VWAP, order flow
-        premarket_pct = None
-        vwap_dist = None
-        order_flow_bias = None
-
-        try:
-            intra = stock.history(period=INTRADAY_RANGE, interval=INTRADAY_INTERVAL, prepost=True)
-        except Exception:
-            intra = None
-
-        if intra is not None and not intra.empty and len(intra) >= 3:
-            iclose = intra["Close"]
-            iopen = intra["Open"]
-            ivol = intra["Volume"]
-
-            # Premarket % from last two bars
-            last_close = float(iclose.iloc[-1])
-            prev_close_intraday = float(iclose.iloc[-2])
-            if prev_close_intraday > 0:
-                premarket_pct = (last_close - prev_close_intraday) / prev_close_intraday * 100
-
-            # VWAP
-            typical_price = (intra["High"] + intra["Low"] + intra["Close"]) / 3
-            total_vol = ivol.sum()
-            if total_vol > 0:
-                vwap_val = float((typical_price * ivol).sum() / total_vol)
-                if vwap_val > 0:
-                    vwap_dist = (price - vwap_val) / vwap_val * 100
-
-            # Order-flow bias: buy vs sell volume
-            of_df = intra[["Open", "Close", "Volume"]].dropna()
-            if not of_df.empty:
-                sign = (of_df["Close"] > of_df["Open"]).astype(int) - (of_df["Close"] < of_df["Open"]).astype(int)
-                buy_vol = float((of_df["Volume"] * (sign > 0)).sum())
-                sell_vol = float((of_df["Volume"] * (sign < 0)).sum())
-                total = buy_vol + sell_vol
-                if total > 0:
-                    order_flow_bias = buy_vol / total  # 0..1
-
-        # EXCLUDE low OFB (flow bias) if under threshold
-        if order_flow_bias is None or order_flow_bias < min_ofb:
-            return None
-
-        # Enrichment (float, short, news, and also country if needed)
-        squeeze = False
-        low_float = False
-        catalyst = False
-        sector = "Unknown"
-        industry = "Unknown"
-        short_pct_display = None
-
-        info = None
-
-        # We may need country info even when enrichment is off (for region filter)
-        if enable_enrichment or region_mode == "US + Canada Only":
+        squeeze=low=catalyst=False; sec="Unknown"; ind="Unknown"; short=None
+        if enrich:
+            info=s.get_info() or {}
+            fl=info.get("floatShares"); sh=info.get("shortPercentOfFloat")
+            sec=info.get("sector","Unknown"); ind=info.get("industry","Unknown")
+            low=fl and fl<20_000_000; squeeze=sh and sh>0.15; short=sh*100 if sh else None
             try:
-                info = stock.get_info() or {}
-            except Exception:
-                info = {}
+                n=s.get_news()
+                if n and "providerPublishTime" in n[0]:
+                    p=datetime.fromtimestamp(n[0]["providerPublishTime"],tz=timezone.utc)
+                    catalyst=(datetime.now(timezone.utc)-p).days<=3
+            except: pass
 
-        # Country from info (if available)
-        if info:
-            info_country = info.get("country")
-            if info_country:
-                country = info_country
-
-        # Region filter: only keep US/Canada when selected
-        if region_mode == "US + Canada Only":
-            if country not in ("United States", "USA", "US", "Canada", "CANADA"):
-                return None
-
-        # Full enrichment only when toggle enabled
-        if enable_enrichment and info is not None:
-            try:
-                float_shares = info.get("floatShares")
-                short_pct = info.get("shortPercentOfFloat")
-                sector = info.get("sector", "Unknown")
-                industry = info.get("industry", "Unknown")
-
-                low_float = bool(float_shares and float_shares < 20_000_000)
-                squeeze = bool(short_pct and short_pct > 0.15)
-                short_pct_display = round(short_pct * 100, 2) if short_pct else None
-            except Exception:
-                pass
-
-            try:
-                news = stock.get_news()
-                if news and "providerPublishTime" in news[0]:
-                    pub = datetime.fromtimestamp(news[0]["providerPublishTime"], tz=timezone.utc)
-                    catalyst = (datetime.now(timezone.utc) - pub).days <= 3
-            except Exception:
-                pass
-
-        # Multi-timeframe label
-        mtf_label = multi_timeframe_label(premarket_pct, m3, m10)
-
-        # Score + probability
-        score = short_window_score(
-            pm=premarket_pct,
-            yday=yday_pct,
-            m3=m3,
-            m10=m10,
-            rsi7=rsi7,
-            rvol10=rvol10,
-            catalyst=catalyst,
-            squeeze=squeeze,
-            vwap=vwap_dist,
-            flow_bias=order_flow_bias,
-        )
-        prob_rise = breakout_probability(score)
-
-        # Sparkline: 10d closes
-        spark_series = close
+        score=short_window_score(pm,yday,m3,m10,rsi7,rvol10,catalyst,squeeze,vwap,flow)
+        prob=breakout_probability(score)
 
         return {
-            "Symbol": ticker,
-            "Exchange": exchange,
-            "Country": country,  # NEW: location column
-            "Price": round(price, 2),
-            "Score": score,
-            "Prob_Rise%": prob_rise,
-            "PM%": round(premarket_pct, 2) if premarket_pct is not None else None,
-            "YDay%": round(yday_pct, 2) if yday_pct is not None else None,
-            "3D%": round(m3, 2) if m3 is not None else None,
-            "10D%": round(m10, 2) if m10 is not None else None,
-            "RSI7": round(rsi7, 2),
-            "EMA10 Trend": ema_trend,
-            "RVOL_10D": round(rvol10, 2) if rvol10 is not None else None,
-            "VWAP%": round(vwap_dist, 2) if vwap_dist is not None else None,
-            "FlowBias": round(order_flow_bias, 2) if order_flow_bias is not None else None,
-            "Squeeze?": squeeze,
-            "LowFloat?": low_float,
-            "Short % Float": short_pct_display,
-            "Sector": sector,
-            "Industry": industry,
-            "Catalyst": catalyst,
-            "MTF_Trend": mtf_label,
-            "Spark": spark_series,
+            "Symbol":t,"Exchange":sym.get("Exchange","US"),
+            "Price":round(price,2),
+            "Volume":int(vol_last),      # ⭐ NEW VOLUME ADDED HERE
+            "Score":score,"Prob_Rise%":prob,
+            "PM%":pm,"YDay%":yday,"3D%":m3,"10D%":m10,
+            "RSI7":rsi7,"RVOL_10D":rvol10,"VWAP%":vwap,"FlowBias":flow,
+            "Squeeze?":squeeze,"LowFloat?":low,"Sector":sec,"Industry":ind,
+            "Catalyst":catalyst,"MTF_Trend":multi_timeframe_label(pm,m3,m10),
+            "Spark":close
         }
 
-    except Exception:
-        return None
-
+    except: return None
 
 @st.cache_data(ttl=6)
-def run_scan(
-    watchlist_text: str,
-    max_universe: int,
-    enable_enrichment: bool,
-    region_mode: str,
-    min_ofb: float,
-):
-    universe = build_universe(watchlist_text, max_universe)
-    results = []
-
+def run_scan(text,maxn,enrich):
+    u=build_universe(text,maxn)
+    res=[]
     with concurrent.futures.ThreadPoolExecutor(max_workers=THREADS) as ex:
-        futures = [ex.submit(scan_one, sym, enable_enrichment, region_mode, min_ofb) for sym in universe]
-        for f in concurrent.futures.as_completed(futures):
-            res = f.result()
-            if res:
-                results.append(res)
+        for f in concurrent.futures.as_completed([ex.submit(scan_one,s,enrich) for s in u]):
+            r=f.result()
+            if r: res.append(r)
+    return pd.DataFrame(res)
 
-    if not results:
-        return pd.DataFrame()
-    return pd.DataFrame(results)
-
-# ========================= SPARKLINE & CHART HELPERS =========================
-def sparkline(series: pd.Series):
-    fig = go.Figure()
-    fig.add_trace(go.Scatter(
-        y=series.values,
-        mode="lines",
-        line=dict(width=2),
-        hoverinfo="skip",
-    ))
-    fig.update_layout(
-        height=60,
-        width=160,
-        margin=dict(l=2, r=2, t=2, b=2),
-        xaxis=dict(visible=False),
-        yaxis=dict(visible=False),
-    )
-    return fig
-
-def bigline(series: pd.Series, title: str):
-    fig = go.Figure()
-    fig.add_trace(go.Scatter(
-        y=series.values,
-        mode="lines+markers",
-        name=title,
-    ))
-    fig.update_layout(
-        height=220,
-        margin=dict(l=40, r=20, t=40, b=40),
-        xaxis_title="Bars (last 10 days)",
-        yaxis_title="Price",
-    )
-    return fig
-
-# ========================= AUDIO ALERT STATE =========================
-if "alerted" not in st.session_state:
-    st.session_state.alerted = set()
-
-def trigger_audio_alert(symbol: str, reason: str):
-    """Play sound + mark symbol as alerted once per session."""
-    st.session_state.alerted.add(symbol)
-    audio_html = """
-    <audio autoplay>
-        <source src="https://actions.google.com/sounds/v1/alarms/digital_watch_alarm_long.ogg" type="audio/ogg">
-    </audio>
-    """
-    st.markdown(audio_html, unsafe_allow_html=True)
-    st.warning(f"🔔 {symbol}: {reason}")
-
-# ========================= MAIN DISPLAY =========================
-with st.spinner("Scanning (10-day momentum, faster universe)…"):
-    df = run_scan(watchlist_text, max_universe, enable_enrichment, region_mode, min_ofb)
+# ========================= UI DISPLAY =========================
+with st.spinner("Scanning..."):
+    df=run_scan(watchlist_text,max_universe,enable_enrichment)
 
 if df.empty:
-    st.error("No results found. Try adding a watchlist or relaxing filters.")
+    st.error("No results found.")
 else:
-    # Apply filters
-    df = df[df["Score"] >= min_breakout]
+    df=df[df["Score"]>=min_breakout]
+    if min_pm_move!=0: df=df[df["PM%"].fillna(-999)>=min_pm_move]
+    if min_yday_gain!=0: df=df[df["YDay%"].fillna(-999)>=min_yday_gain]
+    if squeeze_only: df=df[df["Squeeze?"]]
+    if catalyst_only: df=df[df["Catalyst"]]
+    if vwap_only: df=df[df["VWAP%"].fillna(-999)>0]
 
-    if min_pm_move != 0.0:
-        df = df[df["PM%"].fillna(-999) >= min_pm_move]
-    if min_yday_gain != 0.0:
-        df = df[df["YDay%"].fillna(-999) >= min_yday_gain]
-    if squeeze_only:
-        df = df[df["Squeeze?"]]
-    if catalyst_only:
-        df = df[df["Catalyst"]]
-    if vwap_only:
-        df = df[df["VWAP%"].fillna(-999) > 0]
+    df=df.sort_values(by=["Score","PM%","RSI7"],ascending=[False,False,False])
 
-    df = df.sort_values(by=["Score", "PM%", "RSI7"], ascending=[False, False, False])
+    st.subheader(f"🔥 10-Day Momentum — {len(df)} tickers")
 
-    st.subheader(f"🔥 10-Day Momentum Board — {len(df)} symbols")
+    for _,row in df.iterrows():
+        sym=row["Symbol"]
+        c1,c2,c3,c4=st.columns([2,3,3,3])
 
-    # Iterate + audio alerts + inline charts
-    for _, row in df.iterrows():
-        sym = row["Symbol"]
-
-        # Audio alerts (once per symbol)
-        if sym not in st.session_state.alerted:
-            if row["Score"] is not None and row["Score"] >= ALERT_SCORE_THRESHOLD:
-                trigger_audio_alert(sym, f"Score {row['Score']}")
-            elif row["PM%"] is not None and row["PM%"] >= ALERT_PM_THRESHOLD:
-                trigger_audio_alert(sym, f"Premarket {row['PM%']}%")
-            elif row["VWAP%"] is not None and row["VWAP%"] >= ALERT_VWAP_THRESHOLD:
-                trigger_audio_alert(sym, f"VWAP Dist {row['VWAP%']}%")
-
-        c1, c2, c3, c4 = st.columns([2, 3, 3, 3])
-
-        # Column 1: Basic info + score
-        c1.markdown(f"**{sym}** ({row['Exchange']} • {row['Country']})")
+        c1.markdown(f"**{sym}** ({row['Exchange']})")
         c1.write(f"💲 Price: {row['Price']}")
-        c1.write(f"🔥 Score: **{row['Score']}**")
-        c1.write(f"📈 Prob_Rise: {row['Prob_Rise%']}%")
-        c1.write(f"{row['MTF_Trend']}")
-        c1.write(f"Trend: {row['EMA10 Trend']}")
+        c1.write(f"📊 Volume: {row['Volume']:,}")  # ⭐ NEW — NOW VISIBLE IN UI
+        c1.write(f"🔥 Score: {row['Score']}")
+        c1.write(f"📈 Prob Rise: {row['Prob_Rise%']}%")
+        c1.write(row["MTF_Trend"])
 
-        # Column 2: Momentum snapshot
         c2.write(f"PM%: {row['PM%']}")
-        c2.write(f"YDay%: {row['YDay%']}")
-        c2.write(f"3D%: {row['3D%']}  |  10D%: {row['10D%']}")
-        c2.write(f"RSI7: {row['RSI7']}  |  RVOL_10D: {row['RVOL_10D']}x")
+        c2.write(f"YDay: {row['YDay%']}")
+        c2.write(f"3D%: {row['3D%']} | 10D%: {row['10D%']}")
+        c2.write(f"RSI7: {row['RSI7']} | RVOL10: {row['RVOL_10D']}")
 
-        # Column 3: Microstructure
-        c3.write(f"VWAP Dist %: {row['VWAP%']}")
-        c3.write(f"Order Flow Bias: {row['FlowBias']}")
+        c3.write(f"VWAP Dist: {row['VWAP%']}")
+        c3.write(f"Flow Bias: {row['FlowBias']}")
         if enable_enrichment:
-            c3.write(f"Float/Short: {'LOW FLOAT' if row['LowFloat?'] else 'Normal'} | "
-                     f"Short % Float: {row['Short % Float']}")
-            c3.write(f"Sec/Ind: {row['Sector']} / {row['Industry']}")
-        else:
-            c3.write("Enrichment: OFF (float/short/news skipped for speed)")
+            c3.write(f"Squeeze: {row['Squeeze?']} | Low Float: {row['LowFloat?']}")
+            c3.write(f"{row['Sector']} / {row['Industry']}")
 
-        # Column 4: Sparkline + full chart
-        c4.plotly_chart(sparkline(row["Spark"]), use_container_width=False)
-        with c4.expander("📊 View 10-day chart"):
-            c4.plotly_chart(bigline(row["Spark"], f"{sym} - Last 10 Days"), use_container_width=True)
-
-        st.divider()
-
-    # Download current table
-    csv_cols = [
-        "Symbol", "Exchange", "Country", "Price", "Score", "Prob_Rise%",
-        "PM%", "YDay%", "3D%", "10D%", "RSI7", "EMA10 Trend",
-        "RVOL_10D", "VWAP%", "FlowBias", "Squeeze?", "LowFloat?",
-        "Short % Float", "Sector", "Industry", "Catalyst", "MTF_Trend",
-    ]
-    csv_cols = [c for c in csv_cols if c in df.columns]
+        c4.plotly_chart(go.Figure(data=[go.Scatter(y=row["Spark"].values)]), use_container_width=True)
 
     st.download_button(
-        "📥 Download Screener CSV",
-        data=df[csv_cols].to_csv(index=False),
-        file_name="v8_10day_momentum_screener_uscan_ofb.csv",
-        mime="text/csv",
+        "📥 Download CSV",
+        data=df.to_csv(index=False),
+        file_name="v8_screener.csv"
     )
 
-st.caption("For research and education only. Not financial advice.")
-
-
+st.caption("For research + education only.")
