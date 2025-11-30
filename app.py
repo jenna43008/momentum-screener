@@ -6,15 +6,16 @@ from datetime import datetime, timezone
 from streamlit_autorefresh import st_autorefresh
 import plotly.graph_objs as go
 import math
+import random
 
 # ========================= SETTINGS =========================
 THREADS               = 20           # keep high but not crazy
-AUTO_REFRESH_MS       = 60_000       # auto-refresh every 60 seconds
+AUTO_REFRESH_MS       = 10_000       # auto-refresh every 10 seconds
 HISTORY_LOOKBACK_DAYS = 10           # 🔥 10-day mode
 INTRADAY_INTERVAL     = "2m"         # 2-minute candles
 INTRADAY_RANGE        = "1d"
 
-DEFAULT_MAX_PRICE     = 5.0
+DEFAULT_MAX_PRICE     = 50.0
 DEFAULT_MIN_VOLUME    = 100_000
 DEFAULT_MIN_BREAKOUT  = 0.0
 
@@ -23,15 +24,15 @@ st_autorefresh(interval=AUTO_REFRESH_MS, key="refresh_v8")
 
 # ========================= PAGE SETUP =========================
 st.set_page_config(
-    page_title="V8 – 10-Day Momentum Screener",
+    page_title="V9 – 10-Day Momentum Screener (Hybrid Volume/Randomized)",
     layout="wide",
     initial_sidebar_state="expanded",
 )
 
-st.title("🚀 V8 — 10-Day Momentum Breakout Screener (Faster + Watchlist Mode)")
+st.title("🚀 V9 — 10-Day Momentum Breakout Screener (Hybrid Speed + Volume + Randomized)")
 st.caption(
     "Short-window model • EMA10 • RSI(7) • 3D & 10D momentum • 10D RVOL • "
-    "VWAP + order flow • Watchlist mode • Audio alerts"
+    "VWAP + order flow • Watchlist mode • Audio alerts • V9 universe modes (classic / random / volume-ranked)"
 )
 
 # ========================= SIDEBAR CONTROLS =========================
@@ -54,6 +55,33 @@ with st.sidebar:
         help="Keeps scans fast when you don't use a custom watchlist.",
     )
 
+    # 🔥 NEW: V9 universe mode (adds on top of existing behavior)
+    st.markdown("---")
+    st.subheader("V9 Universe Mode")
+    universe_mode = st.radio(
+        "Universe Construction",
+        options=[
+            "Classic (Alphabetical Slice)",
+            "Randomized Slice",
+            "Live Volume Ranked (slower)",
+        ],
+        index=0,
+        help=(
+            "Classic = original V8 behavior.\n"
+            "Randomized = random subset of symbols each scan.\n"
+            "Live Volume Ranked = prioritize highest intraday volume (slower)."
+        ),
+    )
+
+    volume_rank_pool = st.slider(
+        "Max symbols to consider when volume-ranking (V9)",
+        min_value=100,
+        max_value=2000,
+        value=600,
+        step=100,
+        help="Used only when 'Live Volume Ranked (slower)' is selected.",
+    )
+
     enable_enrichment = st.checkbox(
         "Include float/short + news (slower, more data)",
         value=False,
@@ -72,7 +100,7 @@ with st.sidebar:
     catalyst_only = st.checkbox("Must Have News/Earnings")
     vwap_only = st.checkbox("Above VWAP Only (VWAP% > 0)")
 
-    # 🔁 NEW: optional order-flow bias filter
+    # 🔁 V9: optional order-flow bias filter
     st.markdown("---")
     st.subheader("Order Flow Filter (optional)")
     enable_ofb_filter = st.checkbox(
@@ -92,7 +120,7 @@ with st.sidebar:
     st.markdown("---")
     st.subheader("🔊 Audio Alert Thresholds")
 
-    # 🔇 NEW: toggle to enable/disable alerts
+    # 🔇 V9: toggle to enable/disable alerts
     enable_alerts = st.checkbox(
         "Enable Audio + Alert Banner",
         value=True,
@@ -134,16 +162,58 @@ def load_symbols():
     return df.to_dict("records")
 
 
-def build_universe(watchlist_text: str, max_universe: int):
-    """Return a list of symbol dicts to scan, based on watchlist or limited universe."""
+def build_universe(
+    watchlist_text: str,
+    max_universe: int,
+    universe_mode: str,
+    volume_rank_pool: int,
+):
+    """
+    Return a list of symbol dicts to scan, based on:
+    - Watchlist
+    - Classic alphabetical slice
+    - Randomized slice
+    - Live volume-ranked (V9)
+    """
     wl = watchlist_text.strip()
     if wl:
         raw = wl.replace("\n", " ").replace(",", " ").split()
         tickers = sorted(set(s.upper() for s in raw if s.strip()))
         return [{"Symbol": t, "Exchange": "WATCH"} for t in tickers]
 
-    # No watchlist → limited subset of full US universe
     all_syms = load_symbols()
+
+    # V9 modes
+    if universe_mode == "Randomized Slice":
+        base = all_syms[:]
+        random.shuffle(base)
+        return base[:max_universe]
+
+    if universe_mode == "Live Volume Ranked (slower)":
+        base = all_syms[:volume_rank_pool]
+        ranked = []
+        for sym in base:
+            try:
+                t = yf.Ticker(sym["Symbol"])
+                d = t.history(period="1d", interval="2m", prepost=True)
+                if not d.empty:
+                    live_vol = float(d["Volume"].iloc[-1])
+                    ranked.append({**sym, "LiveVol": live_vol})
+            except Exception:
+                continue
+
+        if not ranked:
+            # fallback to classic if volume fetch fails
+            return all_syms[:max_universe]
+
+        ranked_sorted = sorted(
+            ranked,
+            key=lambda x: x.get("LiveVol", 0.0),
+            reverse=True
+        )
+        return ranked_sorted[:max_universe]
+
+    # Classic (V8 behavior)
     return all_syms[:max_universe]
 
 
@@ -311,7 +381,7 @@ def scan_one(sym, enable_enrichment: bool, enable_ofb_filter: bool, min_ofb: flo
                 if total > 0:
                     order_flow_bias = buy_vol / total  # 0..1
 
-        # 🔁 NEW: optional filter on order-flow bias
+        # Optional order-flow bias filter
         if enable_ofb_filter:
             if order_flow_bias is None or order_flow_bias < min_ofb:
                 return None
@@ -384,9 +454,10 @@ def scan_one(sym, enable_enrichment: bool, enable_ofb_filter: bool, min_ofb: flo
             "FlowBias": round(order_flow_bias, 2) if order_flow_bias is not None else None,
             "Squeeze?": squeeze,
             "LowFloat?": low_float,
-            "Catalyst": catalyst,
+            "Short % Float": short_pct_display,
             "Sector": sector,
             "Industry": industry,
+            "Catalyst": catalyst,
             "MTF_Trend": mtf_label,
             "Spark": spark_series,
         }
@@ -402,8 +473,15 @@ def run_scan(
     enable_enrichment: bool,
     enable_ofb_filter: bool,
     min_ofb: float,
+    universe_mode: str,
+    volume_rank_pool: int,
 ):
-    universe = build_universe(watchlist_text, max_universe)
+    universe = build_universe(
+        watchlist_text,
+        max_universe,
+        universe_mode,
+        volume_rank_pool,
+    )
     results = []
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=THREADS) as ex:
@@ -478,13 +556,15 @@ def trigger_audio_alert(symbol: str, reason: str):
 
 
 # ========================= MAIN DISPLAY =========================
-with st.spinner("Scanning (10-day momentum, faster universe)…"):
+with st.spinner("Scanning (10-day momentum, V9 hybrid universe)…"):
     df = run_scan(
         watchlist_text,
         max_universe,
         enable_enrichment,
         enable_ofb_filter,
         min_ofb,
+        universe_mode,
+        volume_rank_pool,
     )
 
 if df.empty:
@@ -508,7 +588,7 @@ else:
 
     st.subheader(f"🔥 10-Day Momentum Board — {len(df)} symbols")
 
-    # 🔔 NEW: banner showing all symbols that have triggered alerts
+    # 🔔 Alert banner (V9)
     if enable_alerts and st.session_state.alerted:
         alerted_list = ", ".join(sorted(st.session_state.alerted))
         st.info(f"🔔 Active alert symbols: {alerted_list}")
@@ -546,7 +626,9 @@ else:
         c3.write(f"VWAP Dist %: {row['VWAP%']}")
         c3.write(f"Order Flow Bias: {row['FlowBias']}")
         if enable_enrichment:
-            c3.write(f"Squeeze: {row['Squeeze?']} | LowFloat: {row['LowFloat?']}")
+            c3.write(
+                f"Squeeze: {row['Squeeze?']} | LowFloat: {row['LowFloat?']}"
+            )
             c3.write(f"Sec/Ind: {row['Sector']} / {row['Industry']}")
         else:
             c3.write("Enrichment: OFF (float/short/news skipped for speed)")
@@ -563,18 +645,19 @@ else:
         "Symbol", "Exchange", "Price", "Score", "Prob_Rise%",
         "PM%", "YDay%", "3D%", "10D%", "RSI7", "EMA10 Trend",
         "RVOL_10D", "VWAP%", "FlowBias", "Squeeze?", "LowFloat?",
-        "Sector", "Industry", "Catalyst", "MTF_Trend",
+        "Short % Float", "Sector", "Industry", "Catalyst", "MTF_Trend",
     ]
     csv_cols = [c for c in csv_cols if c in df.columns]
 
     st.download_button(
         "📥 Download Screener CSV",
         data=df[csv_cols].to_csv(index=False),
-        file_name="v8_10day_momentum_screener.csv",
+        file_name="v9_10day_momentum_screener_hybrid.csv",
         mime="text/csv",
     )
 
 st.caption("For research and education only. Not financial advice.")
+
 
 
 
