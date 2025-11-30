@@ -10,12 +10,12 @@ import random
 
 # ========================= SETTINGS =========================
 THREADS               = 20           # keep high but not crazy
-AUTO_REFRESH_MS       = 10_000       # auto-refresh every 10 seconds
+AUTO_REFRESH_MS       = 60_000       # auto-refresh every 10 seconds
 HISTORY_LOOKBACK_DAYS = 10           # 🔥 10-day mode
 INTRADAY_INTERVAL     = "2m"         # 2-minute candles
 INTRADAY_RANGE        = "1d"
 
-DEFAULT_MAX_PRICE     = 50.0
+DEFAULT_MAX_PRICE     = 5.0
 DEFAULT_MIN_VOLUME    = 100_000
 DEFAULT_MIN_BREAKOUT  = 0.0
 
