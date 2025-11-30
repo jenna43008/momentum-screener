@@ -27,6 +27,7 @@ st.set_page_config(
     page_title="V9 – 10-Day Momentum Screener (Hybrid Volume/Randomized)",
     layout="wide",
     initial_sidebar_state="expanded",
+    menu_items=None,   # This removes custom menu items (and GitHub link)
 )
 
 st.title("🚀 V9 — 10-Day Momentum Breakout Screener (Hybrid Speed + Volume + Randomized)")
