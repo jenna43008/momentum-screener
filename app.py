@@ -49,7 +49,7 @@ with st.sidebar:
     max_universe = st.slider(
         "Max symbols to scan when no watchlist",
         min_value=50,
-        max_value=600,
+        max_value=2000,
         value=200,
         step=50,
         help="Keeps scans fast when you don't use a custom watchlist.",
