@@ -54,14 +54,6 @@ with st.sidebar:
         help="Keeps scans fast when you don't use a custom watchlist.",
     )
 
-    # NEW: region filter
-    region_mode = st.radio(
-        "Region Filter",
-        options=["Global (no country filter)", "US + Canada Only"],
-        index=1,
-        help="When 'US + Canada Only' is selected, tickers whose country is not US/Canada are skipped."
-    )
-
     enable_enrichment = st.checkbox(
         "Include float/short + news (slower, more data)",
         value=False,
@@ -79,16 +71,6 @@ with st.sidebar:
     squeeze_only = st.checkbox("Short-Squeeze Only")
     catalyst_only = st.checkbox("Must Have News/Earnings")
     vwap_only = st.checkbox("Above VWAP Only (VWAP% > 0)")
-
-    # NEW: minimum order flow bias floor (0–1)
-    min_ofb = st.slider(
-        "Min Order Flow Bias (0–1, buyer control)",
-        min_value=0.00,
-        max_value=1.00,
-        value=0.50,
-        step=0.01,
-        help="Exclude symbols where buy-side order flow is below this level."
-    )
 
     st.markdown("---")
     st.subheader("🔊 Audio Alert Thresholds")
@@ -125,10 +107,7 @@ def load_symbols():
     ).dropna(subset=["Symbol"])
 
     df = df[df["Symbol"].str.contains(r"^[A-Z]{1,5}$", na=False)]
-    # Default country assumption (will be refined by yfinance when enrichment/region filter is used)
-    df["Country"] = "US"
     return df.to_dict("records")
-
 
 def build_universe(watchlist_text: str, max_universe: int):
     """Return a list of symbol dicts to scan, based on watchlist or limited universe."""
@@ -136,7 +115,7 @@ def build_universe(watchlist_text: str, max_universe: int):
     if wl:
         raw = wl.replace("\n", " ").replace(",", " ").split()
         tickers = sorted(set(s.upper() for s in raw if s.strip()))
-        return [{"Symbol": t, "Exchange": "WATCH", "Country": "Unknown"} for t in tickers]
+        return [{"Symbol": t, "Exchange": "WATCH"} for t in tickers]
 
     # No watchlist → limited subset of full US universe
     all_syms = load_symbols()
@@ -187,7 +166,6 @@ def short_window_score(pm, yday, m3, m10, rsi7, rvol10, catalyst, squeeze, vwap,
 
     return round(score, 2)
 
-
 def breakout_probability(score: float) -> float:
     """Map heuristic score to a 0–100 'probability-like' value via logistic."""
     try:
@@ -195,7 +173,6 @@ def breakout_probability(score: float) -> float:
         return round(prob * 100, 1)
     except Exception:
         return None
-
 
 def multi_timeframe_label(pm, m3, m10):
     """Simple multi-timeframe alignment label: intraday + 3D + 10D."""
@@ -216,12 +193,10 @@ def multi_timeframe_label(pm, m3, m10):
 
 
 # ========================= CORE SCAN =========================
-def scan_one(sym, enable_enrichment: bool, region_mode: str, min_ofb: float):
+def scan_one(sym, enable_enrichment: bool):
     try:
         ticker = sym["Symbol"]
         exchange = sym.get("Exchange", "UNKNOWN")
-        country = sym.get("Country", "Unknown")
-
         stock = yf.Ticker(ticker)
 
         # Daily 10d history
@@ -287,9 +262,9 @@ def scan_one(sym, enable_enrichment: bool, region_mode: str, min_ofb: float):
 
             # Premarket % from last two bars
             last_close = float(iclose.iloc[-1])
-            prev_close_intraday = float(iclose.iloc[-2])
-            if prev_close_intraday > 0:
-                premarket_pct = (last_close - prev_close_intraday) / prev_close_intraday * 100
+            prev_close_intra = float(iclose.iloc[-2])
+            if prev_close_intra > 0:
+                premarket_pct = (last_close - prev_close_intra) / prev_close_intra * 100
 
             # VWAP
             typical_price = (intra["High"] + intra["Low"] + intra["Close"]) / 3
@@ -309,11 +284,7 @@ def scan_one(sym, enable_enrichment: bool, region_mode: str, min_ofb: float):
                 if total > 0:
                     order_flow_bias = buy_vol / total  # 0..1
 
-        # EXCLUDE low OFB (flow bias) if under threshold
-        if order_flow_bias is None or order_flow_bias < min_ofb:
-            return None
-
-        # Enrichment (float, short, news, and also country if needed)
+        # Enrichment (float, short, news)
         squeeze = False
         low_float = False
         catalyst = False
@@ -321,29 +292,9 @@ def scan_one(sym, enable_enrichment: bool, region_mode: str, min_ofb: float):
         industry = "Unknown"
         short_pct_display = None
 
-        info = None
-
-        # We may need country info even when enrichment is off (for region filter)
-        if enable_enrichment or region_mode == "US + Canada Only":
+        if enable_enrichment:
             try:
                 info = stock.get_info() or {}
-            except Exception:
-                info = {}
-
-        # Country from info (if available)
-        if info:
-            info_country = info.get("country")
-            if info_country:
-                country = info_country
-
-        # Region filter: only keep US/Canada when selected
-        if region_mode == "US + Canada Only":
-            if country not in ("United States", "USA", "US", "Canada", "CANADA"):
-                return None
-
-        # Full enrichment only when toggle enabled
-        if enable_enrichment and info is not None:
-            try:
                 float_shares = info.get("floatShares")
                 short_pct = info.get("shortPercentOfFloat")
                 sector = info.get("sector", "Unknown")
@@ -387,7 +338,6 @@ def scan_one(sym, enable_enrichment: bool, region_mode: str, min_ofb: float):
         return {
             "Symbol": ticker,
             "Exchange": exchange,
-            "Country": country,  # NEW: location column
             "Price": round(price, 2),
             "Score": score,
             "Prob_Rise%": prob_rise,
@@ -402,10 +352,9 @@ def scan_one(sym, enable_enrichment: bool, region_mode: str, min_ofb: float):
             "FlowBias": round(order_flow_bias, 2) if order_flow_bias is not None else None,
             "Squeeze?": squeeze,
             "LowFloat?": low_float,
-            "Short % Float": short_pct_display,
+            "Catalyst": catalyst,
             "Sector": sector,
             "Industry": industry,
-            "Catalyst": catalyst,
             "MTF_Trend": mtf_label,
             "Spark": spark_series,
         }
@@ -413,20 +362,13 @@ def scan_one(sym, enable_enrichment: bool, region_mode: str, min_ofb: float):
     except Exception:
         return None
 
-
 @st.cache_data(ttl=6)
-def run_scan(
-    watchlist_text: str,
-    max_universe: int,
-    enable_enrichment: bool,
-    region_mode: str,
-    min_ofb: float,
-):
+def run_scan(watchlist_text: str, max_universe: int, enable_enrichment: bool):
     universe = build_universe(watchlist_text, max_universe)
     results = []
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=THREADS) as ex:
-        futures = [ex.submit(scan_one, sym, enable_enrichment, region_mode, min_ofb) for sym in universe]
+        futures = [ex.submit(scan_one, sym, enable_enrichment) for sym in universe]
         for f in concurrent.futures.as_completed(futures):
             res = f.result()
             if res:
@@ -486,7 +428,7 @@ def trigger_audio_alert(symbol: str, reason: str):
 
 # ========================= MAIN DISPLAY =========================
 with st.spinner("Scanning (10-day momentum, faster universe)…"):
-    df = run_scan(watchlist_text, max_universe, enable_enrichment, region_mode, min_ofb)
+    df = run_scan(watchlist_text, max_universe, enable_enrichment)
 
 if df.empty:
     st.error("No results found. Try adding a watchlist or relaxing filters.")
@@ -525,7 +467,7 @@ else:
         c1, c2, c3, c4 = st.columns([2, 3, 3, 3])
 
         # Column 1: Basic info + score
-        c1.markdown(f"**{sym}** ({row['Exchange']} • {row['Country']})")
+        c1.markdown(f"**{sym}** ({row['Exchange']})")
         c1.write(f"💲 Price: {row['Price']}")
         c1.write(f"🔥 Score: **{row['Score']}**")
         c1.write(f"📈 Prob_Rise: {row['Prob_Rise%']}%")
@@ -542,8 +484,7 @@ else:
         c3.write(f"VWAP Dist %: {row['VWAP%']}")
         c3.write(f"Order Flow Bias: {row['FlowBias']}")
         if enable_enrichment:
-            c3.write(f"Float/Short: {'LOW FLOAT' if row['LowFloat?'] else 'Normal'} | "
-                     f"Short % Float: {row['Short % Float']}")
+            c3.write(f"Squeeze: {row['Squeeze?']} | LowFloat: {row['LowFloat?']}")
             c3.write(f"Sec/Ind: {row['Sector']} / {row['Industry']}")
         else:
             c3.write("Enrichment: OFF (float/short/news skipped for speed)")
@@ -557,17 +498,17 @@ else:
 
     # Download current table
     csv_cols = [
-        "Symbol", "Exchange", "Country", "Price", "Score", "Prob_Rise%",
+        "Symbol", "Exchange", "Price", "Score", "Prob_Rise%",
         "PM%", "YDay%", "3D%", "10D%", "RSI7", "EMA10 Trend",
         "RVOL_10D", "VWAP%", "FlowBias", "Squeeze?", "LowFloat?",
-        "Short % Float", "Sector", "Industry", "Catalyst", "MTF_Trend",
+        "Sector", "Industry", "Catalyst", "MTF_Trend",
     ]
     csv_cols = [c for c in csv_cols if c in df.columns]
 
     st.download_button(
         "📥 Download Screener CSV",
         data=df[csv_cols].to_csv(index=False),
-        file_name="v8_10day_momentum_screener_uscan_ofb.csv",
+        file_name="v8_10day_momentum_screener.csv",
         mime="text/csv",
     )
 
