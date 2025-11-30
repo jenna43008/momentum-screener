@@ -29,7 +29,7 @@ with st.sidebar:
     st.header("SCAN MODE + REGION FILTER")
     watchlist_text = st.text_area("Watchlist Symbols:", "", height=80)
 
-    max_universe = st.slider("Max symbols if not watchlist", 50, 600, 200, 50)
+    max_universe = st.slider("Max symbols if not watchlist", 50, 600, 200, 1200, 50)
 
     region_mode = st.radio(
         "Market Universe:",
