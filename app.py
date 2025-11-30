@@ -635,7 +635,7 @@ else:
 
         # Column 4: Sparkline + full chart
         c4.plotly_chart(sparkline(row["Spark"]), use_container_width=False)
-        with c4.("📊 View 10-day chart"):
+        with c4.expander("📊 View 10-day chart"):
             c4.plotly_chart(bigline(row["Spark"], f"{sym} - Last 10 Days"), use_container_width=True)
 
         st.divider()
