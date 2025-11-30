@@ -10,12 +10,12 @@ import math
 
 # ========================= SETTINGS =========================
 THREADS               = 15
-AUTO_REFRESH_MS       = 60_000       # auto-refresh every 60 sec
+AUTO_REFRESH_MS       = 10_000       # auto-refresh every 10 sec
 HISTORY_LOOKBACK_DAYS = 10
 INTRADAY_INTERVAL     = "2m"
 INTRADAY_RANGE        = "1d"
 
-DEFAULT_MAX_PRICE     = 5.0
+DEFAULT_MAX_PRICE     = 50.0
 DEFAULT_MIN_VOLUME    = 100_000
 DEFAULT_MIN_BREAKOUT  = 0.0
 
@@ -225,4 +225,5 @@ st.download_button("📥 Download Results CSV",
                    "V9_Randomized_Live_Screener.csv")
 
 st.caption("For research & education only — not financial advice.")
+
 
